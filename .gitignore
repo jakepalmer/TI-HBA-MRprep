@@ -1,3 +1,7 @@
+archive
+.vscode
+build_sif.sh
+run_pipeline_docker.py
 *license*
 
 # Byte-compiled / optimized / DLL files

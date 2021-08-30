@@ -7,7 +7,7 @@
 # 
 #     https://github.com/ReproNim/neurodocker
 # 
-# Timestamp: 2021/08/26 06:56:41 UTC
+# Timestamp: 2021/08/26 06:51:31 UTC
 
 FROM ubuntu:16.04
 
@@ -44,23 +44,52 @@ RUN export ND_ENTRYPOINT="/neurodocker/startup.sh" \
 
 ENTRYPOINT ["/neurodocker/startup.sh"]
 
-ENV FREESURFER_HOME="/opt/freesurfer-6.0.0-min" \
-    PATH="/opt/freesurfer-6.0.0-min/bin:$PATH"
+ENV FSLDIR="/opt/fsl-6.0.1" \
+    PATH="/opt/fsl-6.0.1/bin:$PATH" \
+    FSLOUTPUTTYPE="NIFTI_GZ" \
+    FSLMULTIFILEQUIT="TRUE" \
+    FSLTCLSH="/opt/fsl-6.0.1/bin/fsltclsh" \
+    FSLWISH="/opt/fsl-6.0.1/bin/fslwish" \
+    FSLLOCKDIR="" \
+    FSLMACHINELIST="" \
+    FSLREMOTECALL="" \
+    FSLGECUDAQ="cuda.q"
 RUN apt-get update -qq \
     && apt-get install -y -q --no-install-recommends \
            bc \
+           dc \
+           file \
+           libfontconfig1 \
+           libfreetype6 \
+           libgl1-mesa-dev \
+           libgl1-mesa-dri \
+           libglu1-mesa-dev \
            libgomp1 \
-           libxmu6 \
+           libice6 \
+           libxcursor1 \
+           libxft2 \
+           libxinerama1 \
+           libxrandr2 \
+           libxrender1 \
            libxt6 \
-           perl \
-           tcsh \
+           sudo \
+           wget \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && echo "Downloading FreeSurfer ..." \
-    && mkdir -p /opt/freesurfer-6.0.0-min \
-    && curl -fsSL --retry 5 https://dl.dropbox.com/s/nnzcfttc41qvt31/recon-all-freesurfer6-3.min.tgz \
-    | tar -xz -C /opt/freesurfer-6.0.0-min --strip-components 1 \
-    && sed -i '$isource "/opt/freesurfer-6.0.0-min/SetUpFreeSurfer.sh"' "$ND_ENTRYPOINT"
+    && echo "Downloading FSL ..." \
+    && mkdir -p /opt/fsl-6.0.1 \
+    && curl -fsSL --retry 5 https://fsl.fmrib.ox.ac.uk/fsldownloads/fsl-6.0.1-centos6_64.tar.gz \
+    | tar -xz -C /opt/fsl-6.0.1 --strip-components 1 \
+    && sed -i '$iecho Some packages in this Docker container are non-free' $ND_ENTRYPOINT \
+    && sed -i '$iecho If you are considering commercial use of this container, please consult the relevant license:' $ND_ENTRYPOINT \
+    && sed -i '$iecho https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/Licence' $ND_ENTRYPOINT \
+    && sed -i '$isource $FSLDIR/etc/fslconf/fsl.sh' $ND_ENTRYPOINT \
+    && echo "Installing FSL conda environment ..." \
+    && bash /opt/fsl-6.0.1/etc/fslconf/fslpython_install.sh -f /opt/fsl-6.0.1 \
+    && echo "Downgrading deprecation module per https://github.com/kaczmarj/neurodocker/issues/271#issuecomment-514523420" \
+    && /opt/fsl-6.0.1/fslpython/bin/conda install -n fslpython -c conda-forge -y deprecation==1.* \
+    && echo "Removing bundled with FSLeyes libz likely incompatible with the one from OS" \
+    && rm -f /opt/fsl-6.0.1/bin/FSLeyes/libz.so.1
 
 ENV CONDA_DIR="/opt/miniconda-latest" \
     PATH="/opt/miniconda-latest/bin:$PATH"
@@ -78,16 +107,9 @@ RUN export PATH="/opt/miniconda-latest/bin:$PATH" \
     && conda install -y -q --name base \
            "python=3.7" \
            "git" \
-           "pandas" \
-           "numpy" \
-           "scipy" \
-           "matplotlib" \
-           "nibabel" \
-           "scikit-image" \
-           "transforms3d" \
     && sync && conda clean -y --all && sync
 
-RUN git clone https://github.com/Deep-MI/qatools-python.git /opt/qatools
+RUN git clone https://issues.dpuk.org/eugeneduff/wmh_harmonisation.git /opt/wmh_harmonisation
 
 RUN echo '{ \
     \n  "pkg_manager": "apt", \
@@ -97,9 +119,9 @@ RUN echo '{ \
     \n      "ubuntu:16.04" \
     \n    ], \
     \n    [ \
-    \n      "freesurfer", \
+    \n      "fsl", \
     \n      { \
-    \n        "version": "6.0.0-min" \
+    \n        "version": "6.0.1" \
     \n      } \
     \n    ], \
     \n    [ \
@@ -107,21 +129,14 @@ RUN echo '{ \
     \n      { \
     \n        "conda_install": [ \
     \n          "python=3.7", \
-    \n          "git", \
-    \n          "pandas", \
-    \n          "numpy", \
-    \n          "scipy", \
-    \n          "matplotlib", \
-    \n          "nibabel", \
-    \n          "scikit-image", \
-    \n          "transforms3d" \
+    \n          "git" \
     \n        ], \
     \n        "use_env": "base" \
     \n      } \
     \n    ], \
     \n    [ \
     \n      "run", \
-    \n      "git clone https://github.com/Deep-MI/qatools-python.git /opt/qatools" \
+    \n      "git clone https://issues.dpuk.org/eugeneduff/wmh_harmonisation.git /opt/wmh_harmonisation" \
     \n    ] \
     \n  ] \
     \n}' > /neurodocker/neurodocker_specs.json

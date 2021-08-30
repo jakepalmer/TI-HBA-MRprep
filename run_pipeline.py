@@ -1,15 +1,19 @@
 # --- SETUP ---
 
 from argparse import ArgumentParser
+from datetime import datetime
 from pathlib import Path
 import subprocess
 import os
+import re
 
 # Get command line options
 
 parser = ArgumentParser("Workflow inputs")
 parser.add_argument("--subject", type=str,
                     help="Subject to process", required=True)
+parser.add_argument("--license", type=str,
+                    help="FreeSurfer license file", required=True)
 parser.add_argument("--base", type=str, help="Base directory", required=True)
 parser.add_argument("--code", type=str, help="Code directory", required=True)
 parser.add_argument("--dicom", type=str, help="Dicom directory", required=True)
@@ -17,10 +21,12 @@ parser.add_argument("--bids", type=str, help="BIDS directory", required=True)
 parser.add_argument("--derivs", type=str,
                     help="BIDS derivatives directory", required=True)
 parser.add_argument("--singularity_dir", type=str,
-                    help="Where the singularity containers are", required=True)
+                    help="Where the singularity containers are",
+                    required=True)
 
 args = parser.parse_args()
-subject = Path(args.subject)
+subject = str(args.subject)
+license = Path(args.license)
 base_dir = Path(args.base)
 code_dir = Path(args.code)
 dicom_dir = Path(args.dicom)
@@ -28,111 +34,101 @@ bids_dir = Path(args.bids)
 derivs_dir = Path(args.derivs)
 singularity_dir = Path(args.singularity_dir)
 
-# Set containers to be used for each
-heudiconv_img = "nipy/heudiconv:latest"
-mriqc_img = "poldracklab/mriqc:latest"
-fastsurfer_img = "fastsurfer:cpu"
-qatools_img = "qatools:latest"
-deepbrainnet_img = "deep-brain-net:dev"
-# Template for adding singularity containers
-# mriqc_img = singularity_dir / "mriqc.sif"
+
+# Singularity:
+heudiconv_img = singularity_dir / "heudiconv_latest.sif"
+mriqc_img = singularity_dir / "mriqc_latest.sif"
+fastsurfer_img = singularity_dir / "fastsurfer_cpu.sif"
+qatools_img = singularity_dir / "qatools_latest.sif"
+deepbrainnet_img = singularity_dir / "ants-pynet_latest.sif"
+lesionseg_img = singularity_dir / "lesion-segmentation_latest.sif"
+qsiprep_img = singularity_dir / "qsiprep_latest.sif"
+fmriprep_img = singularity_dir / "fmriprep_latest.sif"
 
 
-# --- FUNCTIONS ---
+# --- UTILITY FUNCTIONS ---
 
 
 def printParameters():
     """
     Print command line options
     """
-    print(f""" 
-    RUNNING: 
+    print(f"""RUNNING: 
         {subject}
     DIRECTORIES:
-        base         = {base_dir}
-        code         = {code_dir}
-        dicom        = {dicom_dir}
-        BIDS         = {bids_dir}
-        Derivatives  = {derivs_dir}
-        Containers   = {singularity_dir}
+        base                = {base_dir}
+        code                = {code_dir}
+        dicom               = {dicom_dir}
+        BIDS                = {bids_dir}
+        derivatives         = {derivs_dir}
+        containers          = {singularity_dir}
     CONTAINERS:
-        Heudiconv    = {heudiconv_img}
-        MRIQC        = {mriqc_img}
-        FastSurfer   = {fastsurfer_img}
-        QA Tools     = {qatools_img}
-        DeepBrainNet = {deepbrainnet_img}
+        Heudiconv           = {heudiconv_img}
+        MRIQC               = {mriqc_img}
+        FastSurfer          = {fastsurfer_img}
+        QA Tools            = {qatools_img}
+        DeepBrainNet        = {deepbrainnet_img}
+        WMH segmentation    = {lesionseg_img}
+        QSIprep             = {qsiprep_img}
+        fMRIprep            = {fmriprep_img}
     """)
 
 
-def runBash(cmd: str):
+def runBash(cmd):
+    """
+    Wrapper for command line.
+    """
     print(f"    COMMAND: {cmd}")
     subprocess.check_call(cmd, shell=True)
 
 
-def checkFSlicense():
-    f_list = []
-    dir = f"{code_dir}/fastsurfer_src"
-    for f in os.listdir(dir):
-        f_list.append(f)
-
-    result = any("license" in x for x in f_list)
-
-    if result == False:
-        print("""    ERROR: Cannot find any FreeSurfer license in fastsurfer_src directory. 
-    If it is there, make sure it includes the word 'license' somewhere in the file name.
-        """)
-        return 1, None
-    elif result == True:
-        for x in f_list:
-            if "license" in x:
-                license_file = x
-        return 0, license_file
+# --- MAIN PROCESSING STEPS ---
 
 
-def runDcm2BIDS(dicom_dir: Path, bids_dir: Path, code_dir: Path, heudiconv_img: str, subject: str):
+def runDcm2BIDS(dicom_dir, bids_dir, code_dir, heudiconv_img, subject):
     """
     Convert dicoms for BIDS format with Heudiconv.
-    - Assumes the heuristic file is created and is in the ``$code/hediconv_src`` directory
+    - Assumes the heuristic file is created and is in the `$code/hediconv_src` directory
     - For walkthrough: https://reproducibility.stanford.edu/bids-tutorial-series-part-2a/
     - Other links: https://github.com/bids-standard/bids-starter-kit/wiki/
 
     The below command will only need to be run once for a single subject when setting up 
-    the pipeline to generate the ``heuristic.py`` or if adding new scan sequences, but command is included
+    the pipeline to generate the `heuristic.py` or if adding new scan sequences, but command is included
     here for future reference.
 
-    ``docker run --rm -it \
-        -v {dicom_dir}:/base/dicom \
-        -v {bids_dir}:/base/bids \
+    `singularity run \
+        --bind $dicom_dir:/base/dicom \
+        --bind $bids_dir:/base/bids \
         nipy/heudiconv:latest \
-            --dicom_dir_template /base/dicom/{{subject}}/*/*/IM* \
+            --dicom_dir_template /base/dicom/{subject}/*/*/*IM* \
             --outdir /base/bids/ \
             --heuristic convertall \
             --subjects HBA_0001_T1 \
             --converter none \
-            --overwrite``
+            --overwrite`
 
     These steps aren't in tutorials but not removing these files was
     leading to errors and they aren't needed for next step.
 
-    ``cp ${bids_dir}/.heudiconv/HBA_0001_T1/info/dicominfo.tsv ${bids_dir}``
-    ``cp ${bids_dir}/.heudiconv/HBA_0001_T1/info/heuristic.py ${bids_dir}``
-    ``rm -r ${bids_dir}/.heudiconv``
+    `cp ${bids_dir}/.heudiconv/HBA_0001_T1/info/dicominfo.tsv ${bids_dir}`
+    `cp ${bids_dir}/.heudiconv/HBA_0001_T1/info/heuristic.py ${bids_dir}`
+    `rm -r ${bids_dir}/.heudiconv`
 
     Documentation:
     https://heudiconv.readthedocs.io/en/latest/
     """
 
     ### Run conversion ###
-    print("\n    STEP: Dicom to BIDS conversion\n")
+    print("    STEP: Dicom to BIDS conversion")
     cmd = f"""
-    docker run --rm -it \
-        -v {dicom_dir}:/base/dicom \
-        -v {bids_dir}:/base/bids \
-        -v {code_dir}/hediconv_src/heuristic.py:/base/heuristic.py \
+    singularity run \
+        --bind {dicom_dir}:/tmp/dicom \
+        --bind {bids_dir}:/tmp/bids \
+        --bind {code_dir}/hediconv_src/heuristic.py:/tmp/heuristic.py \
         {heudiconv_img} \
-            --dicom_dir_template /base/dicom/{{subject}}/*/*/IM* \
-            --outdir /base/bids/ \
-            --heuristic /base/heuristic.py \
+            --dicom_dir_template /tmp/dicom/{{subject}}/*/*/*IM* \
+            --outdir /tmp/bids/ \
+            --heuristic /tmp/heuristic.py \
             --subjects {subject} \
             --converter dcm2niix -b \
             --overwrite
@@ -140,7 +136,7 @@ def runDcm2BIDS(dicom_dir: Path, bids_dir: Path, code_dir: Path, heudiconv_img: 
     runBash(cmd)
 
 
-def runMRIQC(bids_dir: Path, mriqc_img: str, subject: str):
+def runMRIQC(bids_dir, mriqc_img, subject):
     """
     Run MRIQC on BIDS data.
     This only runs participant level. It is recomended to run the group level
@@ -149,122 +145,205 @@ def runMRIQC(bids_dir: Path, mriqc_img: str, subject: str):
     Documentation:
     https://mriqc.readthedocs.io/en/stable/
     """
-    print("\n    STEP: MRIQC\n")
+    print("    STEP: MRIQC")
     out_dir = derivs_dir / "mriqc"
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     cmd = f"""
-    docker run -it --rm \
-        -v {bids_dir}:/data:ro \
-        -v {out_dir}:/out \
-        {mriqc_img} /data /out \
+    singularity run \
+        --bind {bids_dir}:/tmp/data:ro \
+        --bind {out_dir}:/tmp/out \
+        {mriqc_img} /tmp/data /tmp/out \
         participant --participant_label {subject} --no-sub
     """
     runBash(cmd)
 
 
-def runFastSurfer(bids_dir: Path, derivs_dir: Path, code_dir: Path, fastsurfer_img: str, subject: str):
+def runFastSurfer(bids_dir, derivs_dir, code_dir, fastsurfer_img, subject, license):
     """
     Run FastSurfer on T1 image.
 
     Documentation:
     https://github.com/Deep-MI/FastSurfer
     """
-    print("\n    STEP: FastSurfer\n")
+    print("    STEP: FastSurfer")
     out_dir = derivs_dir / "fastsurfer"
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-    license_found, license_file = checkFSlicense()
-
-    cmd = f"""
-    docker run --rm \
-        -v {bids_dir}:/data \
-        -v {derivs_dir}/fastsurfer:/output \
-        -v {code_dir}/fastsurfer_src/{license_file}:/fs60/{license_file} \
+    fs_cmd = f"""
+    singularity run \
+        --bind {bids_dir}:/tmp/data \
+        --bind {out_dir}:/tmp/output \
+        --bind {license.parent}:/tmp/fs60/{license.name} \
         {fastsurfer_img} \
-        --fs_license /fs60/{license_file} \
-        --t1 /data/{subject}/anat/{subject}_T1w.nii.gz \
-        --sid {subject} \
-        --sd /output \
-        --no_cuda \
-        --parallel
+            --fs_license /tmp/fs60/{license.name} \
+            --t1 /tmp/data/{subject}/anat/{subject}_T1w.nii.gz \
+            --sid {subject} \
+            --sd /tmp/output \
+            --no_cuda \
+            --parallel
+    """
+    qa_cmd = f"""
+    singularity run \
+        --bind {derivs_dir}:/tmp \
+        {qatools_img} python3 /opt/qatools/qatools.py \
+            --subjects_dir /tmp/fastsurfer \
+            --output_dir /tmp/fastsurfer/{subject} \
+            --subjects {subject} \
+            --screenshots \
+            --fastsurfer
     """
 
-    if license_found == 0:
-        runBash(cmd)
-    elif license_found == 1:
-        print("    WARNING: Skipping FastSurfer")
-
-    return license_found
-
-
-def runQAtools(derivs_dir: Path, qatools_img: str, subject: str, license_found: int):
-    """
-    Run QAtools to produce QC output.
-    Output is generated in each participants fastsurfer output directory
-    - screenshots for quick visual QC
-    - qatools-results.csv includes QC metrics (may be some overlap with MRIQC)
-    that can be used for QC of FastSurfer output
-
-    Documentation:
-    https://github.com/Deep-MI/qatools-python
-    """
-    print("\n    STEP: FastSurfer QC")
-    if license_found == 0:
-        try:
-            cmd = f"""
-            docker run --rm \
-                -v {derivs_dir}:/home \
-                {qatools_img} python3 /opt/qatools/qatools.py \
-                --subjects_dir /home/fastsurfer \
-                --output_dir /home/fastsurfer/{subject} \
-                --subjects {subject} \
-                --screenshots \
-                --fastsurfer
-            """
-            runBash(cmd)
-        except FileNotFoundError:
-            print(f"    ERROR: FastSurfer output does not exist for {subject}")
-    elif license_found == 1:
-        print("\n    WARNING: Skipping FastSurfer QC")
+    if license.is_file():
+        runBash(fs_cmd)
+        runBash(qa_cmd)
+    else:
+        print("    ERROR: No license found, skipping FastSurfer")
 
 
-def runDeepBrainNet(derivs_dir: Path, bids_dir: Path, code_dir: Path, deepbrainnet_img: str, subject: str):
+def runDeepBrainNet(derivs_dir, bids_dir, code_dir, deepbrainnet_img, subject):
     """
     Run DeepBrainNet for brain age prediction.
 
-    Code adapted from:
+    Running pipeline as implemented in ANTsPyNet:
+    https://antsx.github.io/ANTsPyNet/docs/build/html/utilities.html# (find "antspynet.utilities.brain_age")
+    Code from authors:
     https://github.com/vishnubashyam/DeepBrainNet
     Citation:
     https://academic.oup.com/brain/article/143/7/2312/5863667?login=true
     """
-    print("\n    STEP: DeepBrainNet\n")
+    print("    STEP: DeepBrainNet")
 
     out_dir = derivs_dir / "deep-brain-net"
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     cmd = f"""
-    docker run --rm \
-        -v {bids_dir}:/home/input \
-        -v {derivs_dir}/deep-brain-net:/home/output \
-        -v {code_dir}/deep-brain-net_src:/home/code \
-        {deepbrainnet_img} bash /home/code/run_prediction.sh {subject}
+    singularity run \
+        --bind {bids_dir}:/tmp/input \
+        --bind {out_dir}:/tmp/output \
+        --bind {code_dir}:/tmp/code \
+        {deepbrainnet_img} python3 /tmp/code/deep-brain-net_src/run_prediction.py  \
+            --subject {subject}
     """
     runBash(cmd)
+
+
+def runWMHsegmentation(derivs_dir, bids_dir, code_dir, lesionseg_img, subject):
+    """
+    WMH segmentation with BIANCA.
+
+    Documentation:
+    https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/BIANCA/Userguide#Data_preparation
+    """
+    print("    STEP: WMH segmentation")
+
+    out_dir = derivs_dir / "lesion-segmentation"
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    cmd = f"""
+    singularity run \
+        --bind {bids_dir}:/tmp/input \
+        --bind {out_dir}:/tmp/output \
+        --bind {code_dir}:/tmp/code \
+        {lesionseg_img} python3 /tmp/code/lesion-segmentation_src/run_segmentation.py  \
+            --subject {subject}
+    """
+    runBash(cmd)
+
+
+def runQSIprep(derivs_dir, bids_dir, subject, license):
+    """
+    Run QSIprep for DWI preprocessing.
+
+    Documentation:
+    https://qsiprep.readthedocs.io/en/latest/index.html
+    Citation:
+    https://www.nature.com/articles/s41592-021-01185-5
+    """
+    print("    STEP: DWI preprocessing")
+
+    # out_dir = derivs_dir / "qsiprep" / f"{subject}"
+    out_dir = derivs_dir
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    cmd = f"""
+    singularity run --cleanenv \
+        --bind {bids_dir}:/tmp/input \
+        --bind {out_dir}:/tmp/output \
+        --bind {code_dir}:/tmp/code \
+        --bind {license}:/tmp/{license.name} \
+        {qsiprep_img} \
+            /tmp/input \
+            /tmp/output \
+            participant \
+            --participant_label {subject} \
+            --unringing-method mrdegibbs \
+            --output-resolution 2 \
+            --prefer-dedicated-fmaps \
+            --work-dir /tmp \
+            --fs-license-file /tmp/{license.name} \
+            --resource-monitor \
+            --stop-on-first-crash
+    """
+    if license.is_file():
+        runBash(cmd)
+    else:
+        print("    ERROR: No license found, skipping QSIprep")
+
+
+def runfMRIprep(derivs_dir, bids_dir, subject, license):
+    """
+    Run fMRIprep for rsfMRI preprocessing.
+
+    Documentation:
+    https://fmriprep.org/en/latest/index.html
+    """
+    print("    STEP: rsfMRI preprocessing")
+
+    out_dir = derivs_dir / "fmriprep" / f"{subject}"
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    cmd = f"""
+    singularity run --cleanenv \
+        --bind {bids_dir}:/tmp/input \
+        --bind {out_dir}:/tmp/output \
+        --bind {code_dir}:/tmp/code \
+        --bind {license}:/tmp/{license.name} \
+        {fmriprep_img} \
+            /tmp/input  \
+            /tmp/output \
+            participant \
+            --participant_label {subject} \
+            --fs-license-file /tmp/{license.name} \
+            --stop-on-first-crash
+    """
+    if license.is_file():
+        runBash(cmd)
+    else:
+        print("    ERROR: No license found, skipping fMRIprep")
 
 
 # --- RUN PREPROCESS ---
 
 
-# BIDS-ify subject code
-bids_subject = "sub-" + str(subject).replace("_", "")
+if __name__ == "__main__":
+    print(datetime.now().strftime("\n%Y-%m-%d %H:%M:%S"), "[START]\n")
 
-printParameters()
-runDcm2BIDS(dicom_dir, bids_dir, code_dir, heudiconv_img, subject)
-runMRIQC(bids_dir, mriqc_img, bids_subject)
-license_found = runFastSurfer(
-    bids_dir, derivs_dir, code_dir, fastsurfer_img, bids_subject)
-runQAtools(derivs_dir, qatools_img, bids_subject, license_found)
-runDeepBrainNet(derivs_dir, bids_dir, code_dir, deepbrainnet_img, bids_subject)
+    # BIDS-ify subject code (ie remove non-alphanumeric characters):
+    # Remember to pass this code to processing functions as all processing
+    # inputs will be taken from the BIDS data set.
+    bids_subject = "sub-" + re.sub(r"[^a-zA-Z0-9]", "", str(subject))
 
-print("\n----- FINISHED -----\n")
+    printParameters()
+    runDcm2BIDS(dicom_dir, bids_dir, code_dir, heudiconv_img, subject)
+    runMRIQC(bids_dir, mriqc_img, bids_subject)
+    runFastSurfer(bids_dir, derivs_dir, code_dir,
+                  fastsurfer_img, bids_subject, license)
+    runDeepBrainNet(derivs_dir, bids_dir, code_dir,
+                    deepbrainnet_img, bids_subject)
+    runWMHsegmentation(derivs_dir, bids_dir, code_dir,
+                       lesionseg_img, bids_subject)
+    runQSIprep(derivs_dir, bids_dir, bids_subject, license)
+    runfMRIprep(derivs_dir, bids_dir, bids_subject, license)
+
+    print(datetime.now().strftime("\n%Y-%m-%d %H:%M:%S"), "[FINISHED]\n")
