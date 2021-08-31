@@ -83,7 +83,7 @@ BIDS is a standard for structuring neuroimaging datasets that is being increasin
 
 HeuDiConv has been developed to automate the conversion from dicom to BIDS. It requires some setup (i.e. putting together a `heuristic.py` file to provide the rules for conversion), however this will generally only need to be setup once and has been done (see `heudiconv_src/heuristic.py`). This would need updating if the MRI sequences change. Example commands to help with the setup are included in the comments in the docstring for the `runDcm2BIDS` function in the `run_pipeline.py` file.
 
-For more info see [BIDS](https://bids.neuroimaging.io/) and [HeuDiConv](https://heudiconv.readthedocs.io/en/latest/) documentation, also this HeuDiConv [walkthrough](https://reproducibility.stanford.edu/bids-tutorial-series-part-2a/) and [wiki](https://github.com/bids-standard/bids-starter-kit/wiki/).
+For more info see [BIDS](https://bids.neuroimaging.io/) and [HeuDiConv](https://heudiconv.readthedocs.io/en/latest/) documentation, also this HeuDiConv [walkthrough](https://reproducibility.stanford.edu/bids-tutorial-series-part-2a/) and [wiki](https://github.com/bids-standard/bids-starter-kit/wiki/). The HeuDiConv [container](https://heudiconv.readthedocs.io/en/latest/installation.html#docker).
 
 ### MRIQC
 
